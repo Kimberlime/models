@@ -980,3 +980,104 @@ def eval_continuously(
             use_tpu=use_tpu,
             postprocess_on_cpu=postprocess_on_cpu,
             global_step=global_step)
+
+
+def eval_all_checkpoints(
+    pipeline_config_path,
+    config_override=None,
+    train_steps=None,
+    sample_1_of_n_eval_examples=1,
+    sample_1_of_n_eval_on_train_examples=1,
+    use_tpu=False,
+    override_eval_num_epochs=True,
+    postprocess_on_cpu=False,
+    model_dir=None,
+    checkpoint_dir=None,
+    eval_index=None,
+    **kwargs):
+  get_configs_from_pipeline_file = MODEL_BUILD_UTIL_MAP[
+      'get_configs_from_pipeline_file']
+  merge_external_params_with_configs = MODEL_BUILD_UTIL_MAP[
+      'merge_external_params_with_configs']
+
+  configs = get_configs_from_pipeline_file(
+      pipeline_config_path, config_override=config_override)
+  kwargs.update({
+      'sample_1_of_n_eval_examples': sample_1_of_n_eval_examples,
+      'use_bfloat16': configs['train_config'].use_bfloat16 and use_tpu
+  })
+  if train_steps is not None:
+    kwargs['train_steps'] = train_steps
+  if override_eval_num_epochs:
+    kwargs.update({'eval_num_epochs': 1})
+    tf.logging.warning(
+        'Forced number of epochs for all eval validations to be 1.')
+  configs = merge_external_params_with_configs(
+      configs, None, kwargs_dict=kwargs)
+  model_config = configs['model']
+  train_input_config = configs['train_input_config']
+  eval_config = configs['eval_config']
+  eval_input_configs = configs['eval_input_configs']
+  eval_on_train_input_config = copy.deepcopy(train_input_config)
+  eval_on_train_input_config.sample_1_of_n_examples = (
+      sample_1_of_n_eval_on_train_examples)
+  if override_eval_num_epochs and eval_on_train_input_config.num_epochs != 1:
+    tf.logging.warning('Expected number of evaluation epochs is 1, but '
+                       'instead encountered `eval_on_train_input_config'
+                       '.num_epochs` = '
+                       '{}. Overwriting `num_epochs` to 1.'.format(
+                           eval_on_train_input_config.num_epochs))
+    eval_on_train_input_config.num_epochs = 1
+
+  if kwargs['use_bfloat16']:
+    tf.compat.v2.keras.mixed_precision.experimental.set_policy('mixed_bfloat16')
+
+  detection_model = MODEL_BUILD_UTIL_MAP['detection_model_fn_base'](
+      model_config=model_config, is_training=True)
+
+  # Create the inputs.
+  eval_inputs = []
+  for eval_input_config in eval_input_configs:
+    next_eval_input = inputs.eval_input(
+        eval_config=eval_config,
+        eval_input_config=eval_input_config,
+        model_config=model_config,
+        model=detection_model)
+    eval_inputs.append((eval_input_config.name, next_eval_input))
+
+  if eval_index is not None:
+    eval_inputs = [eval_inputs[eval_index]]
+
+  global_step = tf.compat.v2.Variable(
+      0, trainable=False, dtype=tf.compat.v2.dtypes.int64)
+  ckpt = tf.compat.v2.train.Checkpoint(
+      step=global_step, model=detection_model)
+  ckpt_list = []
+
+  import re
+
+  def atoi(text):
+      return int(text) if text.isdigit() else text
+
+  def natural_keys(text):
+      return [atoi(c) for c in re.split(r'(\d+)', text)]
+
+  for c in os.listdir(checkpoint_dir):
+      if c.endswith('.index'):
+        ckpt_list.append(os.path.splitext(c)[0])
+
+  ckpt_list.sort(key=natural_keys)
+  for eval_name, eval_input in eval_inputs:
+      summary_writer = tf.compat.v2.summary.create_file_writer(
+          os.path.join(model_dir, 'eval', eval_name))
+      for c in ckpt_list:
+          ckpt.restore(os.path.join(checkpoint_dir, c)).expect_partial()
+          print(c)
+          with summary_writer.as_default():
+            eager_eval_loop(
+                detection_model,
+                configs,
+                eval_input,
+                use_tpu=use_tpu,
+                postprocess_on_cpu=postprocess_on_cpu,
+                global_step=global_step)

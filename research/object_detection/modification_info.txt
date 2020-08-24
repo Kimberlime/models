@@ -1,2 +1,5 @@
 v0.1
     visualize ground truth with vott asset file and inference with pb file
+
+v0.2
+    add a function to evaluate all check points after training.

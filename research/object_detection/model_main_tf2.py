@@ -67,6 +67,7 @@ flags.DEFINE_integer(
 flags.DEFINE_boolean('record_summaries', True,
                      ('Whether or not to record summaries during'
                       ' training.'))
+flags.DEFINE_bool('eval_all_checkpoints', False, 'evaluate all checkpoints after training')
 
 FLAGS = flags.FLAGS
 
@@ -77,15 +78,25 @@ def main(unused_argv):
   tf.config.set_soft_device_placement(True)
 
   if FLAGS.checkpoint_dir:
-    model_lib_v2.eval_continuously(
-        pipeline_config_path=FLAGS.pipeline_config_path,
-        model_dir=FLAGS.model_dir,
-        train_steps=FLAGS.num_train_steps,
-        sample_1_of_n_eval_examples=FLAGS.sample_1_of_n_eval_examples,
-        sample_1_of_n_eval_on_train_examples=(
-            FLAGS.sample_1_of_n_eval_on_train_examples),
-        checkpoint_dir=FLAGS.checkpoint_dir,
-        wait_interval=300, timeout=FLAGS.eval_timeout)
+    if FLAGS.eval_all_checkpoints:
+        model_lib_v2.eval_all_checkpoints(
+            pipeline_config_path=FLAGS.pipeline_config_path,
+            model_dir=FLAGS.model_dir,
+            train_steps=FLAGS.num_train_steps,
+            sample_1_of_n_eval_examples=FLAGS.sample_1_of_n_eval_examples,
+            sample_1_of_n_eval_on_train_examples=(
+                FLAGS.sample_1_of_n_eval_on_train_examples),
+            checkpoint_dir=FLAGS.checkpoint_dir)
+    else:
+        model_lib_v2.eval_continuously(
+            pipeline_config_path=FLAGS.pipeline_config_path,
+            model_dir=FLAGS.model_dir,
+            train_steps=FLAGS.num_train_steps,
+            sample_1_of_n_eval_examples=FLAGS.sample_1_of_n_eval_examples,
+            sample_1_of_n_eval_on_train_examples=(
+                FLAGS.sample_1_of_n_eval_on_train_examples),
+            checkpoint_dir=FLAGS.checkpoint_dir,
+            wait_interval=300, timeout=FLAGS.eval_timeout)
   else:
     if FLAGS.use_tpu:
       # TPU is automatically inferred if tpu_name is None and
